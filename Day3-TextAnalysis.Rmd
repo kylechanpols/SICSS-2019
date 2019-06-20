@@ -1,0 +1,179 @@
+---
+title: 'Day 3: Text Analysis'
+author: "Kyle Chan"
+date: "6/19/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Load data first:
+The data is a collection of scraped facebook messages from the page of the Scottish National Party regarding Scottish Independence from 2011-2017 (N=205). The messages are encoded with Unicode.
+
+```{r import}
+library(readr)
+snp_filtered <- read_csv("snp.filtered.csv")
+View(snp_filtered)
+
+Encoding(snp_filtered$message) <- "UTF-8"
+```
+
+## Text Cleaning
+```{r grep}
+#GREP example : remove "<ed>" in the text
+snp_filtered$message<- gsub("<ed>", "", snp_filtered$message)
+
+#multiple criteria
+snp_filtered$message<- gsub("\r|<U+00A0>", "", snp_filtered$message)
+head(snp_filtered$message)
+```
+
+## Corpus
+```{r corpus}
+library(tm)
+snpc <- Corpus(VectorSource(as.vector(snp_filtered$message))) 
+snpc
+```
+
+##Tidy Text
+```{r tidytext}
+library(tidyverse)
+library(tidytext)
+library(dplyr)
+tidy_snp<- snp_filtered %>%
+    select(created_time,message) %>%
+    unnest_tokens("word", message)
+
+tidy_snp %>%
+  count(word) %>%
+    arrange(desc(n))
+```
+
+##Stop Words, puncutations, numbers, white spaces, 
+```{r stopwords-removal}
+
+stopwords("english") #take a look at the stopwords in English
+stopwords("dutch") #in another language, say Dutch
+#mostly grammatical devices
+
+## Corpus object
+snpc <- tm_map(snpc, removeWords, stopwords("english"))
+
+## Tidy Text object
+ data("stop_words")
+    tidy_snp<-tidy_snp %>%
+      anti_join(stop_words)
+    
+tidy_snp %>%
+  count(word) %>%
+    arrange(desc(n))
+
+## Remove Puncutations
+## Corpus
+snpc <- tm_map(snpc, content_transformer(removePunctuation)); snpc
+
+## Tidytext : it removes punctuations automatically
+
+## Remove Numbers
+## Corpus
+snpc <- tm_map(snpc, content_transformer(removeNumbers)); snpc
+
+## Tidy Text
+tidy_snp<-tidy_snp[-grep("\\b\\d+\\b", tidy_snp$word),]
+
+##Remove whitespaces
+#corpus
+snpc <- tm_map(snpc, content_transformer(stripWhitespace))
+
+## Tidy Text
+tidy_snp$word <- gsub("\\s+","",tidy_snp$word)
+
+## Stemming (undo-conjugations)
+#corpus
+snpc  <- tm_map(snpc, content_transformer(stemDocument), language = "english")
+
+#tidy text
+library(SnowballC)
+  tidy_snp<-tidy_snp %>%
+      mutate_at("word", funs(wordStem((.), language="en")))
+  
+#take a peak
+  tidy_snp %>%
+  count(word) %>%
+    arrange(desc(n))
+```
+
+##The Document-Term Matrix (DTM)
+This is a matrix where each word is a row and each column is a document. The number within each cell describes the number of times the word appears in the document. 
+```{r dtm}
+#corpus
+snpc.dtm <- DocumentTermMatrix(snpc, control = list(wordLengths = c(2, Inf)))
+inspect(snpc.dtm[1:5,3:8])
+#tidy text
+tidy_snp_dtm<-
+  tidy_snp %>%
+  count(created_time, word) %>%
+  cast_dtm(created_time, word, n)
+```
+## Dictionary-based approaches
+
+```{r plotting}
+tidy_snp_top<-
+   tidy_snp %>%
+      anti_join(stop_words) %>%
+        count(word) %>%
+        arrange(desc(n))
+
+top_20<-tidy_snp_top[1:20,]
+
+#create factor variable to sort by frequency
+tidy_snp_top$word <- factor(tidy_snp_top$word, levels = tidy_snp_top$word[order(tidy_snp_top$n,decreasing=TRUE)])
+
+
+library(ggplot2)
+ggplot(top_20, aes(x=word, y=n))+
+  geom_bar(stat="identity")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  ylab("# time of words appeared in SNP FB messages")+
+  xlab("")+
+  guides(fill=FALSE)
+```
+
+Example: a sentiment analysis of facebook messages from SNP between 2011 and 2017 on the Independence of Scotland. How many "positive" words (see valence framing) were used in these messages over time?
+```{r sentiment}
+#Sentiment Analysis
+head(get_sentiments("loughran")) #premade sentiment dictionary
+
+tidy_snp_sen <- tidy_snp %>%
+  inner_join(get_sentiments("bing")) %>%
+    count(created_time, sentiment) 
+
+head(tidy_snp_sen)
+
+#Deal with Time
+tidy_snp$date<-as.Date(tidy_snp$created_time, 
+                                          format="%Y-%m-%d %x") # force to Unix, then reformat
+
+senplot <-
+  tidy_snp %>%
+    inner_join(get_sentiments("bing")) %>% 
+      filter(sentiment=="positive") %>%
+          count(date, sentiment)
+
+ggplot(senplot, aes(x=date, y=n))+
+  geom_line(color="blue")+
+    theme_minimal()+
+      ylab("Frequency of Positive Words in SNP messages")+
+        xlab("Date")
+```
+## Text Networks
+```{r textnets}
+library(devtools)
+install_github("cbail/textnets")
+
+library(textnets)
+
+```
+
